@@ -133,7 +133,7 @@ pred_arr <- array(NA, dim = c(np, K, nsim),   # it's an array with nsim tpm
                     sim = 1:nsim
                   ))
 
-# the model parameter estimates, under hipothetical infinite replicates of the
+# the model parameter estimates, under hypothetical infinite replicates of the
 # study, are assumed to follow a multivariate normal distribution, with the
 # MLE as their mean and a certain variance-covariance matrix.
 # We simulate parameter vectors from this distribution:
@@ -189,11 +189,58 @@ pred_veg$column_name <- "Next land cover"
 pred_veg$row_name <- "Previous land cover"
 
 
+# Transition probability quotients (burned / unburned)
+
+prob_hat <- predict(vegmod1, pdata, type = "response")
+
+prob_q <- prob_hat[pdata$fire == "Burned", ] / prob_hat[pdata$fire == "Unburned", ]
+dimnames(prob_q) <- list(
+  cov_prev_factor = cover_levels,
+  cov_next_factor = cover_levels
+)
+
+# compute p-value. First, get quotient distribution
+prob_q_arr <- pred_arr[pdata$fire == "Burned", , ] / pred_arr[pdata$fire == "Unburned", , ]
+dimnames(prob_q_arr) <- dimnames(prob_q)
+
+pfun <- function(x) {
+  cdf <- ecdf(x)
+  pp <- cdf(1)
+  if(pp < 0.5) return(pp / 2) else return((1 - pp) / 2)
+}
+
+pval_mat <- apply(prob_q_arr, 1:2, pfun)
+
+# Longanize to plot
+probq_long <- as.data.frame.table(prob_q)
+names(probq_long)[3] <- "q"
+pval_long <- as.data.frame.table(pval_mat)
+names(pval_long)[3] <- "pval"
+
+qp <- cbind(data.frame(y = 0.3, x = 1),
+            probq_long, pval = pval_long$pval)
+
+qp$qtext <- format(round(qp$q, 3), nsmall = 3) |> as.character()
+qp$ptext <- format(round(qp$pval, 3), nsmall = 3) |> as.character()
+qp$ptext[qp$ptext == "0.000"] <- "<0.001"
+qp$ptext <- paste("(", qp$ptext, ")", sep = "")
+qp$text <- paste(qp$qtext, qp$ptext, sep = "\n")
+
+qp$column_name <- "Next land cover"
+qp$row_name <- "Previous land cover"
+
+
+# Plot everything
+
 ggplot(pred_veg, aes(cov_next_factor, p_mle, ymin = p_lower, ymax = p_upper,
                      fill = fire)) +
   geom_bar(stat = "identity", width = 0.9, alpha = 0.6,
            position = "dodge") +
   geom_linerange(position = position_dodge(width = 0.9)) +
+
+  geom_text(data = qp, mapping = aes(x = x, y = y, label = text),
+            inherit.aes = F, size = 5.5/.pt) +
+
   facet_nested(rows = vars(row_name, cov_prev_factor),
                cols = vars(column_name, cov_next_factor),
                scales = "free_x",
@@ -218,7 +265,6 @@ ggplot(pred_veg, aes(cov_next_factor, p_mle, ymin = p_lower, ymax = p_upper,
         panel.spacing.y = unit(4, "mm"),
         legend.position = "bottom",
         legend.title = element_blank())
-
 
 ggsave("figures/03) vegetation-transitions-fire.png",
        width = 14, height = 15, units = "cm")

@@ -8,6 +8,8 @@ library(terra)
 library(mgcv)
 library(logitnorm)
 library(doMC)
+library(DHARMa)
+library(RobustLinearReg) # for theil_sen_regression
 theme_set(theme_classic())
 
 # Functions ---------------------------------------------------------------
@@ -169,6 +171,18 @@ sm1$p.table
 anova(m5b)
 anova(m1)
 
+# Check for temporal correlation in the year random effects
+ccc <- coef(m5b)
+coef_years <- ccc[grep("year_factor", names(ccc))]
+acf(coef_years) # No correlation.
+
+# DHARMa residuals
+res <- simulateResiduals(m5b, n = 2000, integerResponse = T)
+plot(res)
+
+dfull$res <- res$scaledResiduals
+dfull_agg <- aggregate(res ~ year_num + cov_prev_factor, dfull, mean)
+acf(dfull_agg$res) # OK
 
 # Year effects predictions ------------------------------------------------
 
@@ -232,19 +246,19 @@ pdata2$p_mle <- logit_norm_vect(lp_mle, sigma_year)
 pdata2$p_lower <- apply(psim2, 1, quantile, probs = 0.025)
 pdata2$p_upper <- apply(psim2, 1, quantile, probs = 0.975)
 
-pdata2$cov_prev_factor <- "All land cover types"
+pdata2$cov_prev_factor <- "Year-only model"
 
 pboth <- rbind(
   pdata[, c("cov_prev_factor", "year_num", "year", "p_mle", "p_lower", "p_upper")],
   pdata2[, c("cov_prev_factor", "year_num", "year", "p_mle", "p_lower", "p_upper")]
 )
 pboth$cov_prev_factor <- factor(pboth$cov_prev_factor,
-                                levels = c(cover_levels, "All land cover types"))
+                                levels = c(cover_levels, "Year-only model"))
 
 # Aggregate data
 data_agg_year <- aggregate(fire ~ cov_prev_factor + year_num, d, mean)
 data_agg_year2 <- aggregate(fire ~ year_num, d, mean)
-data_agg_year2$cov_prev_factor <- "All land cover types"
+data_agg_year2$cov_prev_factor <- "Year-only model"
 
 data_agg_year <- rbind(
   data_agg_year, data_agg_year2[, colnames(data_agg_year)]
@@ -252,7 +266,7 @@ data_agg_year <- rbind(
 data_agg_year$year <- data_agg_year$year_num + year_mid
 data_agg_year$cov_prev_factor <- factor(data_agg_year$cov_prev_factor,
                                         levels = c(cover_levels,
-                                                   "All land cover types"))
+                                                   "Year-only model"))
 
 # Map colors (not used)
 colores <- c(
@@ -261,7 +275,7 @@ colores <- c(
   "#dec313", # grassland
   "#4492ce", # pasture
   "#bd4343", # agriculture
-  "black"    # all
+  "black"    # Year-only model
 )
 
 colores <- c(
@@ -379,7 +393,6 @@ fire_spei
 #        width = 16, height = 12, units = "cm")
 
 
-
 # Merge plots -------------------------------------------------------------
 
 pp <- deeptime::ggarrange2(
@@ -390,3 +403,38 @@ pp <- deeptime::ggarrange2(
 
 ggsave("figures/04) fire-year-spei.png", plot = pp,
        width = 16, height = 20, units = "cm")
+
+
+# SPEI ~ Year (supplementary) ---------------------------------------------
+
+spei_summ <- aggregate(spei ~ year_factor, d, mean_ci, name = "spei")
+spei_summ$year <- as.numeric(as.character(spei_summ$year_factor))
+spei_summ$mean <- spei_summ$spei[, 1]
+spei_summ$lower <- spei_summ$spei[, 2]
+spei_summ$upper <- spei_summ$spei[, 3]
+
+ggplot(spei_summ, aes(year, mean, ymin = lower, ymax = upper)) +
+  geom_ribbon(color = NA, alpha = 0.3) +
+  geom_line(alpha = 0.5) +
+  geom_smooth(method = "lm", linetype = "dashed", linewidth = 0.5,
+              color = viridis(1, begin = 0.4),
+              fill = viridis(1, begin = 0.4)) +
+  geom_point() +
+  xlab("Year") +
+  ylab("SPEI") +
+  nice_theme() +
+  theme(axis.text = element_text(size = 8))
+
+ggsave("figures/Snn) spei-year.png",
+       width = 12, height = 7, units = "cm")
+
+# Theil-Sen regression (Thomas pide)
+tsr <- theil_sen_regression(mean ~ year, data = spei_summ)
+summary(tsr)
+
+# Coefficients:
+#             Estimate Std. Error t value Pr(>|t|)
+# (Intercept) 55.74737   51.99271   1.072    0.297
+# year        -0.02785    0.02585  -1.077    0.295
+# Reportar:
+# year slope = -0.02785; p-value = 0.295
